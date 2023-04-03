@@ -1,0 +1,100 @@
+// algo for shorting using 5 ema and rsi 
+
+indicator("5 EMA Algo", shorttitle = '5 EMA ALGO', overlay = true)
+
+
+
+shortentryMessage = input.string("Enter message for Broker's fresh short entry",title = "Short Entry Message", group = "Broker Messages")
+shortexitMessage = input.string("Enter message for Broker's short exit",title = "Short Exit Message", group = "Broker Messages")
+longentryMessage = input.string("Enter message for Broker's fresh short entry",title = "Long Entry Message", group = "Broker Messages")
+longexitMessage = input.string("Enter message for Broker's long exit",title = "Long Exit Message", group = "Broker Messages")
+
+
+intraday = true
+only_buy = false 
+only_short = false
+emavalue= 3
+rr_buy =3.5 
+rr_sell =5
+far = 0.995 
+far_sell = 1 /
+time_exit = 1500
+trade_entry_time = 0900 
+trade_exit_time = 1330 
+
+//RSI Inputs
+rsi_filter = true 
+rsi_tf = 'W' 
+high_rsi = 40
+
+//Volume Filter Inputs
+vol_filter = true
+vol_mult = 0.6
+timeseperator(time1) =>
+    m = time1 % 100
+    h = (time1-m)/100
+    [h,m]
+
+[hour_entry,min_entry] =  timeseperator(trade_entry_time)
+[hour_exit,min_exit] =  timeseperator(trade_exit_time)
+correct_time = intraday? ((hour>= (int(hour_entry)+1) or (hour== int(hour_entry) and minute >= int(min_entry)))  and ((hour <= (int(hour_exit)-1) or (hour== int(hour_exit) and minute <= int(min_exit))))) : 1
+
+var correct_rsi_short = true
+var correct_rsi_buy = true
+RSI =  request.security(syminfo.tickerid,rsi_tf,ta.rsi(close,14))
+if(rsi_filter)
+    correct_rsi_short:= RSI > high_rsi
+    correct_rsi_buy:= RSI < low_rsi
+
+correct_volume = true 
+if(vol_filter)
+    correct_volume:=  volume > (vol_mult* ta.sma(volume,100)) 
+
+[hour_input,min_input] =  timeseperator(time_exit)
+intradayexit = (hour==int(hour_input) and minute >= (int(min_input)-timeframe.multiplier) and intraday)
+
+newday = dayofmonth!= dayofmonth[1]
+
+var bool isShort = false    
+
+trigger_short = low*far_sell > ta.ema(close,emavalue) and correct_time and correct_rsi_short and correct_volume and only_buy==false
+short = (trigger_short[1] and low<= low[1]) and isShort == false
+shortprice = ta.valuewhen(short,low[1],0)
+stop= ta.valuewhen(short,shortprice*(1.007),0)
+shortexitloss = (high>= stop and ta.barssince(short)>0) or (close>=stop and short)
+shortexitprofit= (low + 0.05) < (shortprice - (rr_sell*(stop- shortprice)))
+shortexit = (shortexitloss or shortexitprofit or intradayexit) and isShort[1]==true
+
+if short
+    isShort := true
+if shortexit
+    isShort := false
+
+plot(ta.ema(close,emavalue))
+
+var bool isLong = false
+
+trigger_buy = high < ta.ema(close,emavalue)*far and correct_time and correct_rsi_buy and correct_volume and only_short==false
+long = (trigger_buy[1] and high>= high[1]) and isLong == false
+buyprice = ta.valuewhen(long,high[1]+0.1,0)
+stoplong= ta.valuewhen(long,buyprice*(1-0.007),0)
+longexitloss = (low<= stoplong and ta.barssince(long)>0) or (close<=stoplong and long)
+longexitprofit= (high - 0.05) > ((rr_buy*(buyprice-stoplong)) + buyprice)
+longexit = (longexitloss or longexitprofit or intradayexit) and isLong[1]==true
+
+if long
+    isLong := true
+if longexit
+    isLong := false
+
+
+if (long and isLong[1]== false)
+    alert(longentryMessage, alert.freq_once_per_bar)          
+
+if(longexit and isLong[1]==true)
+    alert(longexitMessage,alert.freq_once_per_bar)
+
+if (short and isShort[1]== false)
+    alert(shortentryMessage, alert.freq_once_per_bar)
+if(shortexit and isShort[1]==true)
+    alert(shortexitMessage,alert.freq_once_per_bar)
