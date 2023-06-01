@@ -1,44 +1,60 @@
-// algo for shorting using 5 ema and rsi 
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © karanprashanth3
 
-indicator("5 EMA Algo", shorttitle = '5 EMA ALGO', overlay = true)
+//@version=5
+
+strategy("5 EMA ALGO", shorttitle = '5 EMA ALGO', overlay = true)
 
 
+////////////
+// INPUTS //
 
+//Broker Messages
 shortentryMessage = input.string("Enter message for Broker's fresh short entry",title = "Short Entry Message", group = "Broker Messages")
 shortexitMessage = input.string("Enter message for Broker's short exit",title = "Short Exit Message", group = "Broker Messages")
 longentryMessage = input.string("Enter message for Broker's fresh short entry",title = "Long Entry Message", group = "Broker Messages")
 longexitMessage = input.string("Enter message for Broker's long exit",title = "Long Exit Message", group = "Broker Messages")
 
-
-intraday = true
-only_buy = false 
-only_short = false
-emavalue= 3
-rr_buy =3.5 
-rr_sell =5
-far = 0.995 
-far_sell = 1 /
-time_exit = 1500
-trade_entry_time = 0900 
-trade_exit_time = 1330 
+//Strategy Inputs
+intraday = true //input.bool(title="Intraday Backtest?", defval=true,tooltip='Select if you want intraday backtest',group = "Strategy Inputs V6")
+only_buy = false //input.bool(title="Only Long trades?", defval=false,tooltip='Select if you want backtest for only long trades',group = "Strategy Inputs V6")
+only_short = false//input.bool(title="Only Short trades?", defval=false,tooltip='Select if you want backtest for only short trades',group = "Strategy Inputs V6")
+//sl_condition = false //input.bool(title="Fixed SL condition?", defval=false,tooltip='Select if you want backtest based on fixed sl',group = "Strategy Inputs V6")
+//fixed_sl_strategy= input.float(1.00,"Fixed SL for strategy :",step =0.1,tooltip= 'SL will be based on fixed value, not based on high of candles. This is differenet from maximum fixed SL. In case of gaps, the exit is on candle open. Profit will also change according to the Risk reward ratio',group = "Strategy Inputs V6") 
+emavalue= 5//input.int(3,"EMA Period :",tooltip= 'EMA Length for Algo Execution',group = "Strategy")
+rr_buy =3.5 //input.float(3.50,'Risk:Reward ratio for Buy:',group = "Strategy Inputs V6",step = 0.1)
+rr_sell =5//input.float(5.00,'Risk:Reward ratio for Sell:',group = "Strategy Inputs V6",step = 0.1)
+far = 0.995 //input.float(0.995,'Far from ema(For buy)',group = "Strategy Inputs V6")
+far_sell = 1 //input.float(1.00,'Far from ema(For Short)',group = "Strategy Inputs V6")
+//stopbars = input.int(6,'Stoploss bars lookback:',group = "Strategy Inputs V6")
+time_exit = 1500 //input.int(1500, 'Exit time in intraday (HHMM)',group = "Strategy Inputs V6",tooltip = 'Only if intraday backtest is selected')
+//candle_close = input(00, 'exit min in intraday',tooltip = 'This exit will be based on close price of the candle. Check trades in strategy tester')
+trade_entry_time = 0900 //input.int(0900, 'No trade condition before (in HHMM)',group = "Strategy Inputs V6",tooltip = 'Only if intraday backtest is selected') 
+trade_exit_time = 1330 //input.int(1330, 'No trade condition after (in HHMM)',group = "Strategy Inputs V6",tooltip = 'Only if intraday backtest is selected')
 
 //RSI Inputs
-rsi_filter = true 
-rsi_tf = 'W' 
-high_rsi = 40
+rsi_filter = true //input.bool(title="Do you want RSI Filter?", defval=true,group = "RSI Filter Inputs",tooltip='Select if you want to short only if rsi> 60(value from below) and buy only if rsi < 40(value from below)')
+rsi_tf = 'W' //input.timeframe('W','RSI Timeframe: ',group = "RSI Filter Inputs")
+high_rsi = 40 //input.int(40,'Daily RSI(14) should be greater than (for Short) :',group = "RSI Filter Inputs")
+low_rsi = 45 //input.int(45,'Daily RSI(14) should be lesser than (for Buy) :',group = "RSI Filter Inputs")
 
 //Volume Filter Inputs
-vol_filter = true
-vol_mult = 0.6
+vol_filter = true //input.bool(title="Do you want Volume Filter?", defval=true,group = "Volume filter Inputs",tooltip='Select if you want trades to be executed only if the there is volume spike in trigger candle)')
+vol_mult = 0.6 //input.float(0.6,'Volume in trigger candle is ___ times the avg volume :',group = "Volume filter Inputs",tooltip='Avg volume is 100 bar volume')
+
+// Time Seperator Function
 timeseperator(time1) =>
     m = time1 % 100
     h = (time1-m)/100
     [h,m]
 
+//Correct Time for entries
 [hour_entry,min_entry] =  timeseperator(trade_entry_time)
 [hour_exit,min_exit] =  timeseperator(trade_exit_time)
 correct_time = intraday? ((hour>= (int(hour_entry)+1) or (hour== int(hour_entry) and minute >= int(min_entry)))  and ((hour <= (int(hour_exit)-1) or (hour== int(hour_exit) and minute <= int(min_exit))))) : 1
+//plotshape(correct_time,color= color.black)
 
+//rsi filter
 var correct_rsi_short = true
 var correct_rsi_buy = true
 RSI =  request.security(syminfo.tickerid,rsi_tf,ta.rsi(close,14))
@@ -46,55 +62,78 @@ if(rsi_filter)
     correct_rsi_short:= RSI > high_rsi
     correct_rsi_buy:= RSI < low_rsi
 
+//volume filter
 correct_volume = true 
 if(vol_filter)
     correct_volume:=  volume > (vol_mult* ta.sma(volume,100)) 
 
+//Intraday Exit
 [hour_input,min_input] =  timeseperator(time_exit)
 intradayexit = (hour==int(hour_input) and minute >= (int(min_input)-timeframe.multiplier) and intraday)
 
+// First bar Variable
 newday = dayofmonth!= dayofmonth[1]
 
-var bool isShort = false    
+// Short - Entry, exit and alerts
+var bool isShort = false
+var bool isShortexit = false
 
+//trigger condition
 trigger_short = low*far_sell > ta.ema(close,emavalue) and correct_time and correct_rsi_short and correct_volume and only_buy==false
 short = (trigger_short[1] and low<= low[1]) and isShort == false
 shortprice = ta.valuewhen(short,low[1],0)
-stop= ta.valuewhen(short,shortprice*(1.007),0)
-shortexitloss = (high>= stop and ta.barssince(short)>0) or (close>=stop and short)
-shortexitprofit= (low + 0.05) < (shortprice - (rr_sell*(stop- shortprice)))
-shortexit = (shortexitloss or shortexitprofit or intradayexit) and isShort[1]==true
+stop= ta.valuewhen(short,shortprice*(1.003),0)
+shortexitloss = (high>= stop  and ta.barssince(short)<ta.barssince(newday) and ta.barssince(short)>0) or (close>=stop and short)
+shortexitprofit= (low + 0.05) < (shortprice - (rr_sell*(stop- shortprice))) and ta.barssince(short)<ta.barssince(newday)
+shortexit = shortexitloss or shortexitprofit or intradayexit
 
 if short
     isShort := true
+    isShortexit := false
 if shortexit
     isShort := false
+    isShortexit := true
 
 plot(ta.ema(close,emavalue))
+plotshape(short,location = location.belowbar,color = color.yellow)
+plotshape(trigger_short,style = shape.diamond,location = location.belowbar,color = color.red)
+plotshape(isShort,style = shape.circle, location = location.top,color = color.red)
+plotshape(shortexit and isShort[1]==true,style = shape.cross, location = location.abovebar,color= color.red)
 
-var bool isLong = false
-
-trigger_buy = high < ta.ema(close,emavalue)*far and correct_time and correct_rsi_buy and correct_volume and only_short==false
-long = (trigger_buy[1] and high>= high[1]) and isLong == false
-buyprice = ta.valuewhen(long,high[1]+0.1,0)
-stoplong= ta.valuewhen(long,buyprice*(1-0.007),0)
-longexitloss = (low<= stoplong and ta.barssince(long)>0) or (close<=stoplong and long)
-longexitprofit= (high - 0.05) > ((rr_buy*(buyprice-stoplong)) + buyprice)
-longexit = (longexitloss or longexitprofit or intradayexit) and isLong[1]==true
-
-if long
-    isLong := true
-if longexit
-    isLong := false
-
-
-if (long and isLong[1]== false)
-    alert(longentryMessage, alert.freq_once_per_bar)          
-
-if(longexit and isLong[1]==true)
-    alert(longexitMessage,alert.freq_once_per_bar)
-
+//Short entry exit broker messages
 if (short and isShort[1]== false)
     alert(shortentryMessage, alert.freq_once_per_bar)
 if(shortexit and isShort[1]==true)
     alert(shortexitMessage,alert.freq_once_per_bar)
+
+// Long - Entry, exit and alerts
+var bool isLong = false
+var bool isLongexit = false
+
+//trigger condition
+trigger_buy = high < ta.ema(close,emavalue)*far and correct_time and correct_rsi_buy and correct_volume and only_short==false
+long = (trigger_buy[1] and high>= high[1]) and isLong == false
+buyprice = ta.valuewhen(long,high[1]+0.1,0)
+stoplong= ta.valuewhen(long,buyprice*(1-0.007),0)
+longexitloss = (low<= stoplong  and ta.barssince(long)<ta.barssince(newday) and ta.barssince(long)>0) or (close<=stoplong and long)
+longexitprofit= (high - 0.05) > ((rr_buy*(buyprice-stoplong)) + buyprice) and ta.barssince(long)<ta.barssince(newday)
+longexit = longexitloss or longexitprofit or intradayexit
+
+if long
+    isLong := true
+    isLongexit := false
+if longexit
+    isLong := false
+    isLongexit := true
+,
+plotshape(long,location = location.belowbar,color = color.yellow)
+plotshape(trigger_short,style = shape.diamond,location = location.belowbar,color = color.red)
+plotshape(isLong,style = shape.circle, location = location.bottomcolor= color.lime)
+plotshape(longexit and isLong[1]==true,style = shape.cross, location = location.abovebar,color= color.red)
+
+//Long entry exit broker messages
+if (long and isLong[1]== false)
+    alert(longentryMessage, alert.freq_once_per_bar)
+if(longexit and isLong[1]==true)
+    alert(longexitMessage,alert.freq_once_per_bar)
+
